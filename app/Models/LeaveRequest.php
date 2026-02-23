@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use App\Models\User;
 
 class LeaveRequest extends Model
 {
@@ -18,6 +19,12 @@ class LeaveRequest extends Model
         'status',
         'report_path',
         'admin_remark',
+        'hod_signature',
+        'hod_signed_at',
+        'hod_remarks',
+        'admin_signature',
+        'admin_signed_at',
+        'admin_remarks',
     ];
 
     /**

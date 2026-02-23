@@ -1,183 +1,153 @@
 @extends('admin.layouts.app')
 
-@section('title', 'All Leaves')
-@section('page-title', 'All Leaves')
+@section('title', 'Leave Requests')
+@section('page-title', 'Leave Requests Management')
 
 @section('content')
 <div class="container-fluid">
 
     {{-- Top Actions --}}
     <div class="d-flex justify-content-between align-items-center mb-3">
-        <h5 class="mb-0">Leave Requests Lists</h5>        
+        <div>
+            <h5 class="mb-0">Leave Requests</h5>
+            @if(auth()->user()->role === 'hod')
+                <small class="text-muted">
+                    <i class="fas fa-building me-1"></i> Requests from {{ auth()->user()->department->name }} department
+                </small>
+            @endif
+        </div>
+        <a href="{{ route('leaves.create') }}" class="btn btn-primary btn-sm">
+            <i class="fas fa-plus me-1"></i> Apply Leave
+        </a>
     </div>
 
-    {{-- Success Message --}}
-    @if(session('success'))
-        <div class="alert alert-success alert-dismissible fade show">
-            {{ session('success') }}
-            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-        </div>
-    @endif
+    {{-- Info Badge --}}
+    <div class="alert alert-info mb-3" role="alert">
+        <i class="fas fa-info-circle me-2"></i>
+        @if(auth()->user()->role === 'admin')
+            You are viewing all leave requests from all departments.
+        @elseif(auth()->user()->role === 'hod')
+            You are viewing all leave requests from your department ({{ auth()->user()->department->name }}).
+        @endif
+    </div>
 
-    {{-- Leaves Table --}}
+    {{-- Leave Requests Table --}}
     <div class="card shadow-sm border-0">
-        <div class="card-body table-responsive">
+        <div class="card-body">
 
-            <table class="table table-hover align-middle">
+            <table id="dataTable" class="table table-hover align-middle table-striped">
                 <thead class="table-light">
                     <tr>
-                        <th>#</th>
-                        <th>Type</th>
+                        <th>Employee</th>
+                        <th>Department</th>
+                        <th>Leave Type</th>
                         <th>Duration</th>
                         <th>Status</th>
-                        <th>Report</th>
-                        <th width="220">Actions</th>
+                        <th width="200">Actions</th>
                     </tr>
                 </thead>
 
                 <tbody>
-                    @forelse($myleaves as $leave)
-                        @php
-                            $statuses = [
-                                'submitted' => ['class' => 'bg-info', 'icon' => 'fa-paper-plane'],
-                                'pending' => ['class' => 'bg-warning', 'icon' => 'fa-clock'],
-                                'on_progress' => ['class' => 'bg-primary', 'icon' => 'fa-spinner'],
-                                'approved' => ['class' => 'bg-success', 'icon' => 'fa-check'],
-                                'rejected' => ['class' => 'bg-danger', 'icon' => 'fa-times'],
-                            ];
-
-                            $statusData = $statuses[$leave->status] ?? 
-                                ['class' => 'bg-secondary', 'icon' => 'fa-question'];
-
-                            $user = auth()->user();
-                        @endphp
-
+                    @foreach($leaveRequests as $leave)
                         <tr>
-                            {{-- Correct pagination numbering --}}
-                            <td>{{ $myleaves->firstItem() + $loop->index }}</td>
-
                             <td>
                                 <span class="fw-semibold">
-                                    {{ ucfirst($leave->request_type) }}
+                                    {{ $leave->user->full_name }}
                                 </span>
+                                <br>
+                                <small class="text-muted">{{ $leave->user->email }}</small>
+                            </td>
+
+                            <td>
+                                <span class="badge bg-secondary px-2 py-1">
+                                    {{ $leave->user->department->name ?? '—' }}
+                                </span>
+                            </td>
+
+                            <td>
+                                {{ ucfirst(str_replace('_', ' ', $leave->request_type)) }}
                             </td>
 
                             <td>
                                 <small class="text-muted">
                                     {{ \Carbon\Carbon::parse($leave->start_date)->format('d M Y') }}
-                                    -
+                                    <br>
+                                    to
+                                    <br>
                                     {{ \Carbon\Carbon::parse($leave->end_date)->format('d M Y') }}
                                 </small>
                             </td>
 
                             <td>
-                                <span class="badge {{ $statusData['class'] }} px-3 py-2">
-                                    <i class="fas {{ $statusData['icon'] }} me-1"></i>
-                                    {{ strtoupper(str_replace('_', ' ', $leave->status)) }}
-                                </span>
-                            </td>
+                                @php
+                                    $statusColors = [
+                                        'submitted' => 'info',
+                                        'pending' => 'warning',
+                                        'on_progress' => 'primary',
+                                        'approved' => 'success',
+                                        'rejected' => 'danger',
+                                    ];
+                                    $color = $statusColors[$leave->status] ?? 'secondary';
+                                    $icons = [
+                                        'submitted' => 'fa-paper-plane',
+                                        'pending' => 'fa-clock',
+                                        'on_progress' => 'fa-spinner',
+                                        'approved' => 'fa-check',
+                                        'rejected' => 'fa-times',
+                                    ];
+                                    $icon = $icons[$leave->status] ?? 'fa-question';
 
-                            <td>
-                                @if($leave->report_path)
-                                    <a href="{{ asset('storage/' . $leave->report_path) }}"
-                                       target="_blank"
-                                       class="btn btn-sm btn-outline-info">
-                                        <i class="fas fa-download"></i>
-                                    </a>
-                                @else
-                                    <span class="text-muted small">—</span>
-                                @endif
+                                    // Admin sees on_progress as "pending"
+                                    $displayStatus = ($leave->status === 'on_progress' && auth()->user()->role === 'admin')
+                                        ? 'pending'
+                                        : $leave->status;
+                                    $displayColor = ($leave->status === 'on_progress' && auth()->user()->role === 'admin')
+                                        ? $statusColors['pending']
+                                        : $color;
+                                    $displayIcon = ($leave->status === 'on_progress' && auth()->user()->role === 'admin')
+                                        ? $icons['pending']
+                                        : $icon;
+                                @endphp
+                                <span class="badge bg-{{ $displayColor }} px-3 py-2">
+                                    <i class="fas {{ $displayIcon }} me-1"></i>
+                                    {{ ucfirst(str_replace('_', ' ', $displayStatus)) }}
+                                </span>
                             </td>
 
                             <td>
                                 <div class="d-flex gap-1 flex-wrap">
 
                                     <a href="{{ route('leaves.show', $leave->id) }}"
-                                       class="btn btn-sm btn-outline-primary">
+                                       class="btn btn-sm btn-outline-primary" title="View">
                                         <i class="fas fa-eye"></i>
                                     </a>
 
-                                    @if($user->role === 'employee' && $leave->status === 'submitted')
+                                    @if(auth()->user()->role === 'hod' || auth()->user()->role === 'admin')
                                         <a href="{{ route('leaves.edit', $leave->id) }}"
-                                           class="btn btn-sm btn-outline-warning">
+                                           class="btn btn-sm btn-outline-warning" title="Approve/Reject">
                                             <i class="fas fa-edit"></i>
                                         </a>
+                                    @endif
 
+                                    @if(auth()->user()->id === $leave->user_id || auth()->user()->role === 'admin')
                                         <form action="{{ route('leaves.destroy', $leave->id) }}"
-                                              method="POST">
+                                              method="POST" style="display: inline;">
                                             @csrf
                                             @method('DELETE')
-                                            <button class="btn btn-sm btn-outline-danger"
-                                                onclick="return confirm('Are you sure you want to delete this leave?')">
+                                            <button class="btn btn-sm btn-outline-danger" title="Delete"
+                                                onclick="return confirm('Are you sure you want to delete this request?')">
                                                 <i class="fas fa-trash"></i>
                                             </button>
                                         </form>
                                     @endif
 
-                                    @if(in_array($user->role, ['hod','admin']))
-                                        <a href="{{ route('leaves.edit', $leave->id) }}"
-                                           class="btn btn-sm btn-outline-success">
-                                            <i class="fas fa-check-circle"></i>
-                                        </a>
-                                    @endif
-
                                 </div>
                             </td>
                         </tr>
 
-                    @empty
-                        <tr>
-                            <td colspan="6" class="text-center py-4">
-                                <div class="text-muted">
-                                    <i class="fas fa-calendar-times fa-2x mb-2"></i>
-                                    <p class="mb-0">No leave requests found.</p>
-                                </div>
-                            </td>
-                        </tr>
-                    @endforelse
+                    @endforeach
                 </tbody>
             </table>
-
-            {{-- Pagination --}}
-        @if ($myleaves->hasPages())
-    <div class="d-flex justify-content-between align-items-center mt-4">
-
-        <div class="small text-muted">
-            Showing {{ $myleaves->firstItem() }} 
-            to {{ $myleaves->lastItem() }} 
-            of {{ $myleaves->total() }} results
-        </div>
-
-        <nav>
-            <ul class="pagination pagination-sm mb-0">
-
-                {{-- Previous --}}
-                <li class="page-item {{ $myleaves->onFirstPage() ? 'disabled' : '' }}">
-                    <a class="page-link" href="{{ $myleaves->previousPageUrl() }}">
-                        &laquo;
-                    </a>
-                </li>
-
-                {{-- Page Numbers --}}
-                @foreach ($myleaves->getUrlRange(1, $myleaves->lastPage()) as $page => $url)
-                    <li class="page-item {{ $page == $myleaves->currentPage() ? 'active' : '' }}">
-                        <a class="page-link" href="{{ $url }}">{{ $page }}</a>
-                    </li>
-                @endforeach
-
-                {{-- Next --}}
-                <li class="page-item {{ !$myleaves->hasMorePages() ? 'disabled' : '' }}">
-                    <a class="page-link" href="{{ $myleaves->nextPageUrl() }}">
-                        &raquo;
-                    </a>
-                </li>
-
-            </ul>
-        </nav>
-
-    </div>
-@endif
-
 
         </div>
     </div>

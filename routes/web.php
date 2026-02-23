@@ -44,10 +44,13 @@ Route::middleware('auth')->group(function () {
     Route::resource('users', UserController::class);
 
     // Leave Requests
-Route::get('myleaves/', [LeaveRequestController::class,'showMyLeave'])
-    ->name('leaves.showmy');
+    Route::get('myleaves/', [LeaveRequestController::class,'showMyLeave'])
+        ->name('leaves.showmy');
 
     Route::resource('leaves', LeaveRequestController::class);
+
+    Route::get('leaves/{id}/download-pdf', [LeaveRequestController::class, 'downloadPDF'])
+        ->name('leaves.downloadPDF');
 
     Route::resource('users', UserController::class);
 

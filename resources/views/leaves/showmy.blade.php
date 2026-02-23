@@ -1,7 +1,7 @@
 @extends('admin.layouts.app')
 
 @section('title', 'My Leaves')
-@section('page-title', 'My Leaves')
+@section('page-title', 'My Leave Requests')
 
 @section('content')
 <div class="container-fluid">
@@ -9,180 +9,175 @@
     {{-- Top Actions --}}
     <div class="d-flex justify-content-between align-items-center mb-3">
         <h5 class="mb-0">My Leave Requests</h5>
-        <a href="{{ route('leaves.create') }}" class="btn btn-primary">
-            <i class="fas fa-plus me-1"></i> Create Leave
+        <a href="{{ route('leaves.create') }}" class="btn btn-primary btn-sm">
+            <i class="fas fa-plus me-1"></i> Apply New Leave
         </a>
     </div>
 
-    {{-- Success Message --}}
-    @if(session('success'))
-        <div class="alert alert-success alert-dismissible fade show">
-            {{ session('success') }}
-            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-        </div>
-    @endif
-
     {{-- Leaves Table --}}
     <div class="card shadow-sm border-0">
-        <div class="card-body table-responsive">
-
-            <table class="table table-hover align-middle">
+        <div class="card-body">
+            <table id="dataTable" class="table table-hover align-middle table-striped w-100">
                 <thead class="table-light">
                     <tr>
-                        <th>#</th>
-                        <th>Type</th>
+                        <th>Leave Type</th>
                         <th>Duration</th>
                         <th>Status</th>
                         <th>Report</th>
-                        <th width="220">Actions</th>
+                        <th>Actions</th>
                     </tr>
                 </thead>
 
                 <tbody>
                     @forelse($myleaves as $leave)
+
                         @php
-                            $statuses = [
-                                'submitted' => ['class' => 'bg-info', 'icon' => 'fa-paper-plane'],
-                                'pending' => ['class' => 'bg-warning', 'icon' => 'fa-clock'],
-                                'on_progress' => ['class' => 'bg-primary', 'icon' => 'fa-spinner'],
-                                'approved' => ['class' => 'bg-success', 'icon' => 'fa-check'],
-                                'rejected' => ['class' => 'bg-danger', 'icon' => 'fa-times'],
+                            $statusColors = [
+                                'submitted'   => 'info',
+                                'pending'     => 'warning',
+                                'on_progress' => 'primary',
+                                'approved'    => 'success',
+                                'rejected'    => 'danger',
                             ];
 
-                            $statusData = $statuses[$leave->status] ?? 
-                                ['class' => 'bg-secondary', 'icon' => 'fa-question'];
+                            $icons = [
+                                'submitted'   => 'fa-paper-plane',
+                                'pending'     => 'fa-clock',
+                                'on_progress' => 'fa-spinner',
+                                'approved'    => 'fa-check',
+                                'rejected'    => 'fa-times',
+                            ];
 
-                            $user = auth()->user();
+                            $color = $statusColors[$leave->status] ?? 'secondary';
+                            $icon  = $icons[$leave->status] ?? 'fa-question';
                         @endphp
 
                         <tr>
-                            {{-- Correct pagination numbering --}}
-                            <td>{{ $myleaves->firstItem() + $loop->index }}</td>
 
+                            {{-- 1. Leave Type --}}
                             <td>
-                                <span class="fw-semibold">
-                                    {{ ucfirst($leave->request_type) }}
-                                </span>
+                                {{ ucfirst(str_replace('_', ' ', $leave->request_type)) }}
                             </td>
 
+                            {{-- 2. Duration --}}
                             <td>
                                 <small class="text-muted">
                                     {{ \Carbon\Carbon::parse($leave->start_date)->format('d M Y') }}
-                                    -
+                                    <br> to <br>
                                     {{ \Carbon\Carbon::parse($leave->end_date)->format('d M Y') }}
                                 </small>
                             </td>
 
+                            {{-- 3. Status --}}
                             <td>
-                                <span class="badge {{ $statusData['class'] }} px-3 py-2">
-                                    <i class="fas {{ $statusData['icon'] }} me-1"></i>
-                                    {{ strtoupper(str_replace('_', ' ', $leave->status)) }}
+                                <span class="badge bg-{{ $color }} px-3 py-2">
+                                    <i class="fas {{ $icon }} me-1"></i>
+                                    {{ ucfirst(str_replace('_', ' ', $leave->status)) }}
                                 </span>
                             </td>
 
-                            <td>
-                                @if($leave->report_path)
+                            {{-- 4. Report --}}
+                            <td class="text-center">
+                                @if(!empty($leave->report_path))
                                     <a href="{{ asset('storage/' . $leave->report_path) }}"
                                        target="_blank"
-                                       class="btn btn-sm btn-outline-info">
+                                       class="btn btn-sm btn-outline-info"
+                                       title="Download Report">
                                         <i class="fas fa-download"></i>
                                     </a>
                                 @else
-                                    <span class="text-muted small">—</span>
+                                    <span class="text-muted">—</span>
                                 @endif
                             </td>
 
+                            {{-- 5. Actions --}}
                             <td>
                                 <div class="d-flex gap-1 flex-wrap">
 
+                                    {{-- View --}}
                                     <a href="{{ route('leaves.show', $leave->id) }}"
-                                       class="btn btn-sm btn-outline-primary">
+                                       class="btn btn-sm btn-outline-primary"
+                                       title="View">
                                         <i class="fas fa-eye"></i>
                                     </a>
 
-                                    @if($user->role === 'employee' && $leave->status === 'submitted')
+                                    {{-- Edit & Delete only if submitted --}}
+                                    @if($leave->status === 'submitted')
+
                                         <a href="{{ route('leaves.edit', $leave->id) }}"
-                                           class="btn btn-sm btn-outline-warning">
+                                           class="btn btn-sm btn-outline-warning"
+                                           title="Edit">
                                             <i class="fas fa-edit"></i>
                                         </a>
 
                                         <form action="{{ route('leaves.destroy', $leave->id) }}"
-                                              method="POST">
+                                              method="POST"
+                                              style="display:inline-block;">
                                             @csrf
                                             @method('DELETE')
-                                            <button class="btn btn-sm btn-outline-danger"
-                                                onclick="return confirm('Are you sure you want to delete this leave?')">
+                                            <button type="submit"
+                                                    class="btn btn-sm btn-outline-danger"
+                                                    title="Delete"
+                                                    onclick="return confirm('Are you sure you want to delete this request?')">
                                                 <i class="fas fa-trash"></i>
                                             </button>
                                         </form>
-                                    @endif
 
-                                    @if(in_array($user->role, ['hod','admin']))
-                                        <a href="{{ route('leaves.edit', $leave->id) }}"
-                                           class="btn btn-sm btn-outline-success">
-                                            <i class="fas fa-check-circle"></i>
-                                        </a>
                                     @endif
 
                                 </div>
                             </td>
+
                         </tr>
 
                     @empty
                         <tr>
-                            <td colspan="6" class="text-center py-4">
+                            <td colspan="5" class="text-center py-5">
                                 <div class="text-muted">
-                                    <i class="fas fa-calendar-times fa-2x mb-2"></i>
-                                    <p class="mb-0">No leave requests found.</p>
+                                    <i class="fas fa-calendar-times fa-3x mb-3 opacity-50"></i>
+                                    <p class="lead mb-2">No leave requests found</p>
+                                    <a href="{{ route('leaves.create') }}" class="btn btn-primary btn-sm">
+                                        <i class="fas fa-plus me-1"></i> Apply Leave
+                                    </a>
                                 </div>
                             </td>
                         </tr>
                     @endforelse
                 </tbody>
+
             </table>
-
-            {{-- Pagination --}}
-        @if ($myleaves->hasPages())
-    <div class="d-flex justify-content-between align-items-center mt-4">
-
-        <div class="small text-muted">
-            Showing {{ $myleaves->firstItem() }} 
-            to {{ $myleaves->lastItem() }} 
-            of {{ $myleaves->total() }} results
-        </div>
-
-        <nav>
-            <ul class="pagination pagination-sm mb-0">
-
-                {{-- Previous --}}
-                <li class="page-item {{ $myleaves->onFirstPage() ? 'disabled' : '' }}">
-                    <a class="page-link" href="{{ $myleaves->previousPageUrl() }}">
-                        &laquo;
-                    </a>
-                </li>
-
-                {{-- Page Numbers --}}
-                @foreach ($myleaves->getUrlRange(1, $myleaves->lastPage()) as $page => $url)
-                    <li class="page-item {{ $page == $myleaves->currentPage() ? 'active' : '' }}">
-                        <a class="page-link" href="{{ $url }}">{{ $page }}</a>
-                    </li>
-                @endforeach
-
-                {{-- Next --}}
-                <li class="page-item {{ !$myleaves->hasMorePages() ? 'disabled' : '' }}">
-                    <a class="page-link" href="{{ $myleaves->nextPageUrl() }}">
-                        &raquo;
-                    </a>
-                </li>
-
-            </ul>
-        </nav>
-
-    </div>
-@endif
-
-
         </div>
     </div>
+
 </div>
 @endsection
+
+
+@push('scripts')
+<script>
+    $(document).ready(function () {
+
+        // Only initialize once
+        if (!$.fn.DataTable.isDataTable('#dataTable')) {
+
+            $('#dataTable').DataTable({
+                paging: true,
+                searching: true,      // Search enabled
+                ordering: true,
+                info: true,
+                autoWidth: false,
+                responsive: true,
+                columnDefs: [
+                    { orderable: false, targets: [3, 4] }
+                ],
+                language: {
+                    search: "Search:",              // Search label
+                    searchPlaceholder: "Type here..." // Placeholder
+                }
+            });
+
+        }
+
+    });
+</script>
+@endpush

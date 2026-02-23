@@ -94,30 +94,39 @@ class AuthController extends Controller
 public function dashboard()
 {
     $userId = auth()->id();
+    $currentUser = auth()->user();
 
     // Fetch all leave requests with user relation
     $leaveRequests = \App\Models\LeaveRequest::with('user')->get();
 
     // -------- User-specific stats --------
     $submittedCount = $leaveRequests->where('status', 'submitted')->where('user_id', $userId)->count();
-    $pendingCount   = $leaveRequests->where('status', 'pending')->where('user_id', $userId)->count();
+    $pendingCount   = $leaveRequests->where('status', ['pending','on_progress'])->where('user_id', $userId)->count();
     $approvedCount  = $leaveRequests->where('status', 'approved')->where('user_id', $userId)->count();
     $rejectedCount  = $leaveRequests->where('status', 'rejected')->where('user_id', $userId)->count();
 
     // -------- Admin / all users stats --------
     $allSubmittedCount = $leaveRequests->where('status','submitted')->count();
-    $allPendingCount   = $leaveRequests->where('status','pending')->count();
+    $allPendingCount   = $leaveRequests->where('status',['pending','on_progress'])->count();
     $allApprovedCount  = $leaveRequests->where('status','approved')->count();
     $allRejectedCount  = $leaveRequests->where('status','rejected')->count();
 
+    // -------- HOD Department User Count --------
+    $hodDepartmentUserCount = 0;
+    if ($currentUser->role === 'hod' && $currentUser->department_id) {
+        $hodDepartmentUserCount = User::where('department_id', $currentUser->department_id)->count();
+    }
+
     // -------- Latest pending requests (admin view or user view) --------
     $latestPending = $leaveRequests
-        ->where('status', 'pending')
+        ->where('status', ['pending','on_progress'])
         ->sortByDesc('created_at')
         ->take(6);
 
     // -------- Chart data (grouped by request_type) --------
-    $chartData = $leaveRequests->groupBy('request_type')->map->count();
+    $chartData = $leaveRequests->groupBy('request_type')->map(function ($group) {
+        return count($group);
+    });
     $chartLabels = $chartData->keys()->toArray();
     $chartValues = $chartData->values()->toArray();
 
@@ -130,6 +139,7 @@ public function dashboard()
         'allPendingCount',
         'allApprovedCount',
         'allRejectedCount',
+        'hodDepartmentUserCount',
         'latestPending',
         'chartLabels',
         'chartValues',

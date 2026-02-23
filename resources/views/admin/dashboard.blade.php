@@ -64,7 +64,19 @@
     @if(auth()->user()->role === 'hod' || auth()->user()->role === 'admin')
     <div class="row mt-4">
 
-        <div class="col-lg-4 col-12">
+        <div class="col-lg-3 col-12">
+            <div class="small-box bg-primary">
+                <div class="inner">
+                    <h3>{{ $hodDepartmentUserCount }}</h3>
+                    <p>Department Staff</p>
+                </div>
+                <div class="icon">
+                    <i class="fas fa-users"></i>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-3 col-12">
             <div class="small-box bg-warning">
                 <div class="inner">
                     <h3>{{ $pendingCount }}</h3>
@@ -76,7 +88,7 @@
             </div>
         </div>
 
-        <div class="col-lg-4 col-12">
+        <div class="col-lg-3 col-12">
             <div class="small-box bg-success">
                 <div class="inner">
                     <h3>{{ $approvedCount }}</h3>
@@ -88,7 +100,7 @@
             </div>
         </div>
 
-        <div class="col-lg-4 col-12">
+        <div class="col-lg-3 col-12">
             <div class="small-box bg-danger">
                 <div class="inner">
                     <h3>{{ $rejectedCount }}</h3>
