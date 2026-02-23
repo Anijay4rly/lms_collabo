@@ -40,7 +40,7 @@
     </div>
 
     <footer class="main-footer text-sm">
-        <strong>© {{ date('Y') }} Your Company.</strong>
+        <strong>© {{ date('Y') }} PMS.</strong>
     </footer>
 
 </div>

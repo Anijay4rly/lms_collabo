@@ -28,7 +28,7 @@
 
                 {{-- DASHBOARD (ALL ROLES) --}}
                 <li class="nav-item">
-                    <a href="#" class="nav-link active">
+                    <a href="{{ route('dashboard') }}" class="nav-link active">
                         <i class="nav-icon fas fa-tachometer-alt"></i>
                         <p>Dashboard</p>
                     </a>
