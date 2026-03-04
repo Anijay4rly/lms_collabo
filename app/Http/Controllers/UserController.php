@@ -64,11 +64,11 @@ class UserController extends Controller
      * Show the form for editing the specified user.
      */
     public function edit(User $user)
-    {
-        $departments = Department::all();
-        return view('users.edit', compact('user', 'departments'));
-    }
-
+        {
+            $user->load('department');
+            $departments = Department::all();
+            return view('users.edit', compact('departments', 'user'));
+        }
     /**
      * Update the specified user in storage.
      */
@@ -79,11 +79,12 @@ class UserController extends Controller
             'mname' => 'nullable|string|max:255',
             'lname' => 'required|string|max:255',
             'email' => 'required|email|unique:users,email,' . $user->id,
-            'password' => 'nullable|min:8|confirmed',
-            'gender' => 'required|in:Male,Female,Other',
+            'password' => 'nullable|min:6|confirmed',
+            'gender' => 'required|in:male,female',
             'dob' => 'required|date|before:today',
             'role' => 'required|in:student,employee,hod,admin',
             'department_id' => 'nullable|exists:departments,id',
+            'assigned_as'=>'nullable|string|max:255',
         ]);
 
         if ($validated['password'] ?? null) {

@@ -4,388 +4,319 @@ namespace App\Http\Controllers;
 
 use App\Models\LeaveRequest;
 use App\Models\User;
+use App\Models\LeaveHistory;
+use App\Models\AuditLog;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
-use TCPDF;
+use Illuminate\Support\Facades\DB;
 use Carbon\Carbon;
-
+use Barryvdh\DomPDF\Facade\Pdf;
+use Illuminate\Support\Facades\Storage;
 
 class LeaveRequestController extends Controller
 {
-    /**
-     * Display a listing of leave requests.
-     * Admins see all, HODs see only their department's requests.
-     */
     public function index()
     {
         $user = Auth::user();
 
         if ($user->role === 'admin') {
-            // Admin sees all leave requests
-            $leaveRequests = LeaveRequest::with('user.department')
-                ->latest()
-                ->get();
+            $leaveRequests = LeaveRequest::with('user.department')->latest()->paginate(15);
         } elseif ($user->role === 'hod') {
-            // HOD sees only their department's leave requests
-            $leaveRequests = LeaveRequest::whereHas('user', function ($query) use ($user) {
-                $query->where('department_id', $user->department_id);
-            })
-            ->with('user.department')
-            ->latest()
-            ->get();
+            $leaveRequests = LeaveRequest::whereHas('user', fn($q) => $q->where('department_id', $user->department_id))
+                ->with('user.department')->latest()->paginate(15);
         } else {
-            // Others shouldn't see this page
             abort(403, 'Unauthorized');
         }
 
         return view('leaves.index', compact('leaveRequests'));
     }
 
-    /**
-     * Show the form for creating a new leave request.
-     */
     public function create()
     {
+
         return view('leaves.create');
     }
 
-    /**
-     * Store a newly created leave request in storage.
-     */
     public function store(Request $request)
     {
         $validated = $request->validate([
             'request_type' => 'required|string',
             'start_date'   => 'required|date|today_or_future',
             'end_date'     => 'required|date|after_or_equal:start_date',
-            'report_path'  => 'nullable|file|mimes:pdf,jpg,png|max:2048',
+            'reasons'      => 'nullable|string',
+            'destination'  => 'nullable|string',
         ], [
-            'start_date.today_or_future' => 'Leave start date cannot be in the past. Please select today or a future date.',
-            'end_date.after_or_equal' => 'End date must be the same as or after the start date.',
+            'start_date.today_or_future' => 'Leave cannot start in the past.',
         ]);
+
+        // Check if user has a signature
+        if (empty($user->signature)) {
+            return redirect()->route('profile.edit')
+                ->with('error', 'You must upload a digital signature before approving leaves.');
+        }
+
+        $days = Carbon::parse($validated['start_date'])
+            ->diffInDays(Carbon::parse($validated['end_date'])) + 1;
+
+        if ($days > 14) {
+            return back()->withInput()->with('error', 'Maximum allowed leave is 14 days.');
+        }
 
         $user = Auth::user();
 
-        // Check for overlapping leave requests
-        $overlappingLeave = LeaveRequest::where('user_id', $user->id)
-            ->whereIn('status', ['submitted', 'pending', 'on_progress', 'approved'])
-            ->whereBetween('start_date', [$validated['start_date'], $validated['end_date']])
-            ->orWhere(function ($query) use ($validated, $user) {
-                $query->where('user_id', $user->id)
-                    ->whereIn('status', ['submitted', 'pending', 'on_progress', 'approved'])
-                    ->whereBetween('end_date', [$validated['start_date'], $validated['end_date']]);
-            })
-            ->orWhere(function ($query) use ($validated, $user) {
-                $query->where('user_id', $user->id)
-                    ->whereIn('status', ['submitted', 'pending', 'on_progress', 'approved'])
-                    ->where('start_date', '<=', $validated['start_date'])
-                    ->where('end_date', '>=', $validated['end_date']);
-            })
-            ->first();
+        $overlap = LeaveRequest::where('user_id', $user->id)
+            ->whereIn('status', ['submitted', 'pending', 'approved'])
+            ->where(function ($q) use ($validated) {
+                $q->whereBetween('start_date', [$validated['start_date'], $validated['end_date']])
+                  ->orWhereBetween('end_date',   [$validated['start_date'], $validated['end_date']])
+                  ->orWhere(fn($q2) => $q2->where('start_date', '<=', $validated['start_date'])
+                                           ->where('end_date',   '>=', $validated['end_date']));
+            })->exists();
 
-        if ($overlappingLeave) {
-            return redirect()->back()
-                ->withInput()
-                ->with('error', 'You already have a leave request during this period (' .
-                        \Carbon\Carbon::parse($overlappingLeave->start_date)->format('d M Y') . ' to ' .
-                        \Carbon\Carbon::parse($overlappingLeave->end_date)->format('d M Y') . '). ' .
-                        'Please select different dates or cancel the existing request first.');
+        if ($overlap) {
+            return back()->withInput()->with('error', 'You already have an overlapping leave request.');
         }
 
-        $validated['user_id'] = $user->id;
-        $validated['status'] = 'submitted';
+        $data = $validated;
+        $data['user_id'] = $user->id;
+        $data['status']  = 'submitted';
 
-        // Handle file upload
-        if ($request->hasFile('report_path')) {
-            $path = $request->file('report_path')->store('reports', 'public');
-            $validated['report_path'] = $path;
-        }
+        $leaveRequest = LeaveRequest::create($data);
 
-        LeaveRequest::create($validated);
+        // Save initial submission in leave_histories
+        LeaveHistory::create([
+            'leave_request_id' => $leaveRequest->id,
+            'user_id'          => $user->id,
+            'action'           => 'submitted',
+            'remarks'          => $validated['reasons'] ?? 'No reason provided',
+            'created_at'      => now(),
+            'updated_at'=> now(),
+        ]);
 
         return redirect()->route('leaves.showmy')->with('success', 'Leave request submitted successfully.');
     }
 
-    /**
-     * Display the specified leave request.
-     */
     public function show($id)
     {
         $leaveRequest = LeaveRequest::with('user.department')->findOrFail($id);
-
-        // Check if leave request's user still exists
-        if (!$leaveRequest->user) {
-            abort(404, 'Associated user not found for this leave request.');
-        }
-
-        // Check permission
         $user = Auth::user();
-        if ($user->id !== $leaveRequest->user_id && $user->role === 'employee') {
-            abort(403, 'Unauthorized');
-        }
 
-        // HOD can only view from their own department
-        if ($user->role === 'hod' && (!$user->department_id || $user->department_id !== $leaveRequest->user->department_id)) {
-            abort(403, 'You can only view leave requests from your department.');
+        if ($user->role === 'employee' && $user->id !== $leaveRequest->user_id) {
+            abort(403);
+        }
+        if ($user->role === 'hod' && $leaveRequest->user->department_id !== $user->department_id) {
+            abort(403);
         }
 
         return view('leaves.show', compact('leaveRequest'));
     }
 
-    /**
-     * Display user's own leave requests with filtering.
-     */
-    public function showMyLeave(Request $request)
+    public function approve(Request $request, $id)
     {
-        $query = LeaveRequest::where('user_id', auth()->id());
+        $leave = LeaveRequest::findOrFail($id);
+        $user  = Auth::user();
 
-        // Filter by status
-        if ($request->has('status') && $request->status !== '') {
-            $query->where('status', $request->status);
+        // Check role
+        if (!in_array($user->role, ['hod', 'admin'])) {
+            abort(403);
         }
 
-        // Filter by leave type
-        if ($request->has('request_type') && $request->request_type !== '') {
-            $query->where('request_type', 'LIKE', '%' . $request->request_type . '%');
+        // HOD cannot approve outside their department
+        if ($user->role === 'hod' && $leave->user->department_id !== $user->department_id) {
+            return back()->with('error', 'Cannot approve leaves outside your department.');
         }
 
-        // Filter by date range - from date
-        if ($request->has('from_date') && $request->from_date !== '') {
-            $query->where('start_date', '>=', $request->from_date);
-        }
-
-        // Filter by date range - to date
-        if ($request->has('to_date') && $request->to_date !== '') {
-            $query->where('end_date', '<=', $request->to_date);
-        }
-
-        $myleaves = $query->latest()->get();
-
-        return view('leaves.showmy', compact('myleaves'));
-    }
-
-    /**
-     * Show the form for editing a leave request.
-     */
-    public function edit($id)
-    {
-        $leaveRequest = LeaveRequest::with('user.department')->findOrFail($id);
-        $user = Auth::user();
-
-        // Check if leave request's user still exists
-        if (!$leaveRequest->user) {
-            abort(404, 'Associated user not found for this leave request.');
-        }
-
-        // Only employee can edit their own unsubmitted requests, only HOD/Admin can change status
-        if ($user->id !== $leaveRequest->user_id && $user->role !== 'hod' && $user->role !== 'admin') {
-            abort(403, 'Unauthorized');
-        }
-
-        // HOD can only edit requests from their own department
-        if ($user->role === 'hod' && (!$user->department_id || $user->department_id !== $leaveRequest->user->department_id)) {
-            abort(403, 'You can only edit leave requests from your department.');
-        }
-
-        return view('leaves.edit', compact('leaveRequest'));
-    }
-
-    /**
-     * Update the leave request in storage.
-     */
-    public function update(Request $request, $id)
-    {
-        $leaveRequest = LeaveRequest::with('user.department')->findOrFail($id);
-        $user = Auth::user();
-
-        // Check if leave request's user still exists
-        if (!$leaveRequest->user) {
-            abort(404, 'Associated user not found for this leave request.');
-        }
-
-        // Check permission - HOD can only update from their department
-        if ($user->role === 'hod' && (!$user->department_id || $user->department_id !== $leaveRequest->user->department_id)) {
-            return redirect()->back()->with('error', 'You can only update leave requests from your department.');
+        // Check if user has a signature
+        if (empty($user->signature)) {
+            return redirect()->route('profile.edit')
+                ->with('error', 'You must upload a digital signature before approving leaves.');
         }
 
         $validated = $request->validate([
-            'status' => 'required|in:submitted,pending,on_progress,approved,rejected',
-            'report_path' => 'nullable|file|mimes:pdf,jpg,png|max:2048',
-            'hod_signature' => 'nullable|string',
-            'hod_remarks' => 'nullable|string',
-            'admin_signature' => 'nullable|string',
-            'admin_remarks' => 'nullable|string',
+            'remarks' => 'nullable|string|max:1500',
         ]);
 
-        // Handle file upload if provided
-        if ($request->hasFile('report_path')) {
-            $path = $request->file('report_path')->store('reports', 'public');
-            $validated['report_path'] = $path;
-        }
+        DB::transaction(function () use ($leave, $user, $validated, $request) {
+            $action = $user->role === 'hod' ? 'hod_approved' : 'admin_approved';
 
-        // HOD signing (changes status to on_progress)
-        if ($user->role === 'hod' && $request->has('hod_signature')) {
-            $validated['hod_signature'] = $request->hod_signature;
-            $validated['hod_signed_at'] = now();
-            $validated['hod_remarks'] = $validated['hod_remarks'] ?? null;
-            $validated['status'] = 'on_progress';
-        }
+            // Ensure leave is in correct state
+            if ($user->role === 'hod' && $leave->status !== 'submitted') {
+                throw new \Exception('Leave must be submitted to be approved by HOD.');
+            }
+            if ($user->role === 'admin' && $leave->status !== 'pending') {
+                throw new \Exception('Leave must be pending to be approved by Admin.');
+            }
 
-        // Admin signing (changes status to approved)
-        if ($user->role === 'admin' && $request->has('admin_signature')) {
-            $validated['admin_signature'] = $request->admin_signature;
-            $validated['admin_signed_at'] = now();
-            $validated['admin_remarks'] = $validated['admin_remarks'] ?? null;
-            $validated['status'] = 'approved';
-        }
+            // Update leave status
+            $leave->status = $user->role === 'hod' ? 'pending' : 'approved';
+            $leave->save();
 
-        $leaveRequest->update($validated);
+            // Insert into leave_histories
+            LeaveHistory::create([
+                'leave_request_id' => $leave->id,
+                'user_id'          => $user->id,
+                'action'           => $action,
+                'remarks'          => $validated['remarks'] ?? 'No remarks provided',
+                'created_at'=> now(),
+                'updated_at'=> now(),
+            ]);
 
-        return redirect()->route('leaves.show', $leaveRequest->id)->with('success', 'Leave request updated successfully.');
+            // Insert into audit log
+            AuditLog::create([
+                'user_id'     => $user->id,
+                'action'      => 'approve',
+                'description' => ucfirst($action) . " leave request ID: {$leave->id}",
+                'ip_address'  => $request->ip(),
+                'user_agent'  => $request->userAgent(),
+            ]);
+        });
+
+        $message = $user->role === 'hod'
+            ? 'Leave approved by HOD. Awaiting final admin approval.'
+            : 'Leave request fully approved.';
+
+        return redirect()->route('leaves.show', $leave->id)
+            ->with('success', $message);
     }
-
-    /**
-     * Remove a leave request from storage.
-     */
-    public function destroy($id)
+    public function reject(Request $request, $id)
     {
-        $leaveRequest = LeaveRequest::with('user.department')->findOrFail($id);
-        $user = Auth::user();
+        $leave = LeaveRequest::findOrFail($id);
+        $user  = Auth::user();
 
-        // Check if leave request's user still exists
-        if (!$leaveRequest->user) {
-            abort(404, 'Associated user not found for this leave request.');
+        if (!in_array($user->role, ['hod', 'admin'])) abort(403);
+        if ($user->role === 'hod' && $leave->user->department_id !== $user->department_id) {
+            return back()->with('error', 'Cannot reject leaves outside your department.');
         }
 
-        // Only employee, admin, or HOD of same department can delete
-        $isOwner = $user->id === $leaveRequest->user_id;
-        $isAdmin = $user->role === 'admin';
-        $isHodOfDept = $user->role === 'hod' && $user->department_id && $user->department_id === $leaveRequest->user->department_id;
+        $validated = $request->validate([
+            'remarks' => 'nullable|string|max:1500',
+        ]);
 
-        if (!$isOwner && !$isAdmin && !$isHodOfDept) {
-            abort(403, 'Unauthorized');
-        }
+        DB::transaction(function () use ($leave, $user, $validated, $request) {
+            $leave->status = 'rejected';
+            $leave->save();
 
-        $leaveRequest->delete();
-        return redirect()->route('leaves.index')->with('success', 'Leave request deleted successfully.');
+            LeaveHistory::create([
+                'leave_request_id' => $leave->id,
+                'user_id'          => $user->id,
+                'action'           => 'rejected',
+                'remarks'          => $validated['remarks'] ?? 'No rejection reason provided',
+                'created_at'      => now(),
+                'updated_at'      => now(),
+            ]);
+
+            AuditLog::create([
+                'user_id'     => $user->id,
+                'action'      => 'reject',
+                'description' => 'Rejected leave request ID: ' . $leave->id,
+                'ip_address'  => $request->ip(),
+                'user_agent'  => $request->userAgent(),
+            ]);
+        });
+
+        return redirect()->route('leaves.show', $leave->id)
+            ->with('success', 'Leave request rejected.');
     }
 
-    /**
-     * Download leave request as PDF with signatures
-     */
+
+    public function pending()
+    {
+        $pendingLeaves = LeaveRequest::where('status', 'pending')->with('user.department')->latest()->paginate(15);
+        return view('leaves.pending', compact('pendingLeaves'));
+    }
+
+    public function onprogress()
+    {
+        $onProgressLeaves = LeaveRequest::where('status', 'onprogress')->with('user.department')->latest()->paginate(15);
+        return view('leaves.onprogress', compact('onProgressLeaves'));
+    }
+
+    public function approved()
+    {
+        $approvedLeaves = LeaveRequest::where('status', 'approved')->with('user.department')->latest()->paginate(15);
+        return view('leaves.approved', compact('approvedLeaves'));
+    }
+
+    public function rejected()
+    {
+        $rejectedLeaves = LeaveRequest::where('status', 'rejected')->with('user.department')->latest()->paginate(15);
+        return view('leaves.rejected', compact('rejectedLeaves'));
+    }
+
     public function downloadPDF($id)
-    {
-        $leaveRequest = LeaveRequest::with('user.department')->findOrFail($id);
-        $user = Auth::user();
+{
+    $leaveRequest = LeaveRequest::with('user.department')->findOrFail($id);
 
-        // Check if leave request's user still exists
-        if (!$leaveRequest->user) {
-            abort(404, 'Associated user not found for this leave request.');
-        }
-
-        // Only employee can download their own approved leaves, admin and HOD can download any
-        if ($user->id !== $leaveRequest->user_id && $user->role !== 'admin' && $user->role !== 'hod') {
-            abort(403, 'Unauthorized');
-        }
-
-        // HOD can only download from their department
-        if ($user->role === 'hod' && (!$user->department_id || $user->department_id !== $leaveRequest->user->department_id)) {
-            abort(403, 'Unauthorized');
-        }
-
-        // Create PDF
-        $pdf = new TCPDF('P', 'mm', 'A4', true, 'UTF-8', false);
-        $pdf->SetDefaultMonospacedFont('Courier');
-        $pdf->SetMargins(15, 15, 15);
-        $pdf->SetAutoPageBreak(TRUE, 15);
-        $pdf->AddPage();
-
-        // Set font
-        $pdf->SetFont('helvetica', 'B', 20);
-        $pdf->Cell(0, 15, 'MINISTRY OF HEALTH', 0, 1, 'C');
-
-        $pdf->SetFont('helvetica', '', 12);
-        $pdf->Cell(0, 10, 'Leave Request Form', 0, 1, 'C');
-        $pdf->Ln(10);
-
-        // Employee Details
-        $pdf->SetFont('helvetica', 'B', 11);
-        $pdf->Cell(0, 10, 'EMPLOYEE DETAILS', 0, 1, 'L');
-        $pdf->SetFont('helvetica', '', 11);
-
-        $details = "Employee Name: {$leaveRequest->user->full_name}\n";
-        $details .= "Email: {$leaveRequest->user->email}\n";
-        $details .= "Department: {$leaveRequest->user->department->name}\n";
-        $details .= "Leave Type: {$leaveRequest->request_type}\n";
-        $details .= "Start Date: " . Carbon::parse($leaveRequest->start_date)->format('d M Y') . "\n";
-        $details .= "End Date: " . Carbon::parse($leaveRequest->end_date)->format('d M Y') . "\n";
-        $details .= "Duration: " . $leaveRequest->start_date->diffInDays($leaveRequest->end_date) + 1 . " day(s)\n";
-        $details .= "Status: " . strtoupper(str_replace('_', ' ', $leaveRequest->status)) . "\n";
-
-        $pdf->MultiCell(0, 5, $details, 0, 'L');
-        $pdf->Ln(5);
-
-        // Signatures section
-        $pdf->SetFont('helvetica', 'B', 11);
-        $pdf->Cell(0, 10, 'APPROVALS', 0, 1, 'L');
-        $pdf->SetFont('helvetica', '', 10);
-
-        // HOD Signature
-        if ($leaveRequest->hod_signature) {
-            $pdf->Ln(5);
-            $pdf->Cell(0, 10, 'Head of Department Approval:', 0, 1);
-
-            // Decode and display HOD signature image
-            if (strpos($leaveRequest->hod_signature, 'data:image') === 0) {
-                list($type, $data) = explode(';', $leaveRequest->hod_signature);
-                list(, $data) = explode(',', $data);
-                $data = base64_decode($data);
-                $imagePath = sys_get_temp_dir() . '/hod_sig.png';
-                file_put_contents($imagePath, $data);
-                $pdf->Image($imagePath, 20, $pdf->GetY(), 40, 20);
-                $pdf->Ln(20);
-                unlink($imagePath);
-            }
-
-            $pdf->SetFont('helvetica', '', 9);
-            if ($leaveRequest->hod_remarks) {
-                $pdf->Cell(0, 5, "Remarks: " . $leaveRequest->hod_remarks, 0, 1);
-            }
-            $pdf->Cell(0, 5, "Approved on: " . Carbon::parse($leaveRequest->hod_signed_at)->format('d M Y H:i:s'), 0, 1);
-        }
-
-        // Admin Signature
-        if ($leaveRequest->admin_signature) {
-            $pdf->Ln(10);
-            $pdf->SetFont('helvetica', '', 10);
-            $pdf->Cell(0, 10, 'Admin Approval:', 0, 1);
-
-            // Decode and display Admin signature image
-            if (strpos($leaveRequest->admin_signature, 'data:image') === 0) {
-                list($type, $data) = explode(';', $leaveRequest->admin_signature);
-                list(, $data) = explode(',', $data);
-                $data = base64_decode($data);
-                $imagePath = sys_get_temp_dir() . '/admin_sig.png';
-                file_put_contents($imagePath, $data);
-                $pdf->Image($imagePath, 20, $pdf->GetY(), 40, 20);
-                $pdf->Ln(20);
-                unlink($imagePath);
-            }
-
-            $pdf->SetFont('helvetica', '', 9);
-            if ($leaveRequest->admin_remarks) {
-                $pdf->Cell(0, 5, "Remarks: " . $leaveRequest->admin_remarks, 0, 1);
-            }
-            $pdf->Cell(0, 5, "Approved on: " . Carbon::parse($leaveRequest->admin_signed_at)->format('d M Y H:i:s'), 0, 1);
-        }
-
-        // Footer
-        $pdf->Ln(15);
-        $pdf->SetFont('helvetica', '', 8);
-        $pdf->Cell(0, 10, 'This is an electronically signed document.', 0, 1, 'C');
-        $pdf->Cell(0, 10, 'Generated on: ' . now()->format('d M Y H:i:s'), 0, 1, 'C');
-
-        // Output PDF
-        return $pdf->Output('leave_request_' . $leaveRequest->id . '.pdf', 'D');
+    // Only approved leaves can be downloaded
+    if ($leaveRequest->status !== 'approved') {
+        abort(403, 'Only approved leaves can be downloaded as PDF.');
     }
+
+    // Optionally, get the last leave for this user (for comparison or history)
+    $lastLeave = LeaveRequest::where('user_id', $leaveRequest->user_id)
+        ->where('id', '<', $leaveRequest->id)
+        ->whereIn('status', ['approved', 'rejected'])
+        ->orderBy('start_date', 'desc')
+        ->first();
+
+    $pdf = Pdf::loadView('leaves.pdf', compact('leaveRequest', 'lastLeave'));
+
+    // Generate unique filename
+    $unique = date('Ymd_His') . '_' . mt_rand(1000,9999);
+    $fullName = trim($leaveRequest->user->fname.' '.$leaveRequest->user->lname);
+
+    return $pdf->download("LeaveRequest_{$fullName}_{$unique}.pdf");
+}
+
+public function showMyLeave(Request $request)
+{
+    $query = LeaveRequest::where('user_id', auth()->id());
+
+    // Filter by leave status
+    if ($request->filled('status')) {
+        $query->where('status', $request->status);
+    }
+
+    // Filter by request type
+    if ($request->filled('request_type')) {
+        $query->where('request_type', 'LIKE', '%' . $request->request_type . '%');
+    }
+
+    // Filter by request category (nullable field)
+    if ($request->filled('request_category')) {
+        $query->where('request_category', 'LIKE', '%' . $request->request_category . '%');
+    }
+
+    // Filter by start date (from)
+    if ($request->filled('from_date')) {
+        $query->whereDate('start_date', '>=', $request->from_date);
+    }
+
+    // Filter by end date (to)
+    if ($request->filled('to_date')) {
+        $query->whereDate('end_date', '<=', $request->to_date);
+    }
+
+    // Get paginated results, latest first
+    $myleaves = $query->latest()->paginate(10);
+
+    return view('leaves.showmy', compact('myleaves'));
+}
+
+    public function staff(){
+        $staff = Auth::user();
+
+        if ($staff->role === 'admin') {
+            $leaveRequests = LeaveRequest::with('user.department')->latest()->paginate(15);
+        } elseif ($staff->role === 'hod') {
+            $leaveRequests = LeaveRequest::whereHas('user', fn($q) => $q->where('department_id', $staff->department_id))
+                ->with('user.department')->latest()->paginate(15);
+        } else {
+            abort(403, 'Unauthorized');
+        }
+
+        return view('leaves.staff', compact('leaveRequests'));
+    }
+
+
 }

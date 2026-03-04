@@ -65,6 +65,7 @@
                                 <p class="mb-0">
                                     <strong>Days:</strong> {{ \Carbon\Carbon::parse($leaveRequest->start_date)->diffInDays(\Carbon\Carbon::parse($leaveRequest->end_date)) + 1 }} days
                                 </p>
+
                             </div>
                         </div>
                     </div>

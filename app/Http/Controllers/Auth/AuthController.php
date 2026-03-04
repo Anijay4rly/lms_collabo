@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use App\Models\User;
+use App\Models\LeaveRequest;
 use Illuminate\Support\Facades\Hash;
 
 class AuthController extends Controller
@@ -32,7 +33,6 @@ class AuthController extends Controller
 
         if (Auth::attempt($credentials, $remember)) {
             $request->session()->regenerate();
-            // Redirect to the dashboard route
             return redirect()->route('dashboard');
         }
 
@@ -54,7 +54,7 @@ class AuthController extends Controller
      */
     public function store(Request $request)
     {
-        $request->validate([
+        $validated = $request->validate([
             'fname' => 'required|string|max:255',
             'lname' => 'required|string|max:255',
             'mname' => 'nullable|string|max:255',
@@ -65,13 +65,13 @@ class AuthController extends Controller
         ]);
 
         User::create([
-            'fname' => $request->fname,
-            'mname' => $request->mname,
-            'lname' => $request->lname,
-            'email' => $request->email,
-            'gender' => $request->gender,
-            'dob' => $request->dob,
-            'password' => Hash::make($request->password),
+            'fname' => $validated['fname'],
+            'mname' => $validated['mname'],
+            'lname' => $validated['lname'],
+            'email' => $validated['email'],
+            'gender' => $validated['gender'],
+            'dob' => $validated['dob'],
+            'password' => Hash::make($validated['password']),
         ]);
 
         return redirect()->route('login')->with('status', 'Account created successfully! You can now login.');
@@ -91,61 +91,144 @@ class AuthController extends Controller
     /**
      * Show dashboard page for logged-in users.
      */
-public function dashboard()
-{
-    $userId = auth()->id();
-    $currentUser = auth()->user();
+    public function dashboard()
+    {
+        $currentUser = Auth::user();
 
-    // Fetch all leave requests with user relation
-    $leaveRequests = \App\Models\LeaveRequest::with('user')->get();
+        // Fetch all leave requests with user relation
+        $leaveRequests = LeaveRequest::with('user')->get();
 
-    // -------- User-specific stats --------
-    $submittedCount = $leaveRequests->where('status', 'submitted')->where('user_id', $userId)->count();
-    $pendingCount   = $leaveRequests->where('status', ['pending','on_progress'])->where('user_id', $userId)->count();
-    $approvedCount  = $leaveRequests->where('status', 'approved')->where('user_id', $userId)->count();
-    $rejectedCount  = $leaveRequests->where('status', 'rejected')->where('user_id', $userId)->count();
+        /*
+        |--------------------------------------------------------------------------
+        | USER-SPECIFIC STATS
+        |--------------------------------------------------------------------------
+        */
+        $submittedCount = $leaveRequests->where('user_id', $currentUser->id)
+            ->where('status', 'submitted')->count();
 
-    // -------- Admin / all users stats --------
-    $allSubmittedCount = $leaveRequests->where('status','submitted')->count();
-    $allPendingCount   = $leaveRequests->where('status',['pending','on_progress'])->count();
-    $allApprovedCount  = $leaveRequests->where('status','approved')->count();
-    $allRejectedCount  = $leaveRequests->where('status','rejected')->count();
+        $pendingCount = $leaveRequests->where('user_id', $currentUser->id)
+            ->whereIn('status', ['pending', 'on_progress'])->count();
 
-    // -------- HOD Department User Count --------
-    $hodDepartmentUserCount = 0;
-    if ($currentUser->role === 'hod' && $currentUser->department_id) {
-        $hodDepartmentUserCount = User::where('department_id', $currentUser->department_id)->count();
+        $approvedCount = $leaveRequests->where('user_id', $currentUser->id)
+            ->where('status', 'approved')->count();
+
+        $rejectedCount = $leaveRequests->where('user_id', $currentUser->id)
+            ->where('status', 'rejected')->count();
+
+        /*
+        |--------------------------------------------------------------------------
+        | HOD DEPARTMENT STATS
+        |--------------------------------------------------------------------------
+        */
+        $hodSubmittedCount = 0;
+        $hodOnProgressCount = 0;
+        $hodApprovedCount = 0;
+        $hodRejectedCount = 0;
+
+        if ($currentUser->role === 'hod' && $currentUser->department_id) {
+            // Get all employee IDs in this department
+            $departmentUserIds = User::where('department_id', $currentUser->department_id)
+                ->where('role', 'employee')
+                ->pluck('id');
+
+            $hodSubmittedCount = $leaveRequests
+                ->whereIn('user_id', $departmentUserIds)
+                ->where('status', 'submitted')
+                ->count();
+
+        $hodOnProgressCount = $leaveRequests
+            ->where('user_id', $departmentUserIds)
+            ->where('status', 'pending')
+            ->count();
+
+            $hodApprovedCount = $leaveRequests
+                ->whereIn('user_id', $departmentUserIds)
+                ->where('status', 'approved')
+                ->whereNotNull('admin_signature')
+                ->count();
+
+            $hodRejectedCount = $leaveRequests
+                ->whereIn('user_id', $departmentUserIds)
+                ->where('status', 'rejected')
+                ->whereNotNull('hod_remarks')
+                ->count();
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | ADMIN / GLOBAL STATS
+        |--------------------------------------------------------------------------
+        */
+        $allSubmittedCount = $leaveRequests->where('status', 'submitted')->count();
+        $allPendingCount = $leaveRequests->whereIn('status', ['pending', 'on_progress'])->count();
+        $allApprovedCount = $leaveRequests->where('status', 'approved')->count();
+        $allRejectedCount = $leaveRequests->where('status', 'rejected')->count();
+
+        /*
+        |--------------------------------------------------------------------------
+        | RECENT 3 WAITING YOUR APPROVAL (FOR ADMIN / HOD)
+        |--------------------------------------------------------------------------
+        */
+        $recentPendingLeaves = collect();
+        if (in_array($currentUser->role, ['admin', 'hod'])) {
+            $recentPendingLeaves = $leaveRequests
+                ->whereIn('status', ['pending', 'on_progress'])
+                ->sortByDesc('created_at')
+                ->take(3)
+                ->values();
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | CHART DATA (Grouped by request_type)
+        |--------------------------------------------------------------------------
+        */
+        $chartData = $leaveRequests
+            ->groupBy('request_type')
+            ->map(fn ($group) => $group->count());
+
+        $chartLabels = $chartData->keys()->toArray();
+        $chartValues = $chartData->values()->toArray();
+
+        // Employee chart data
+        $employeeChartLabels = ['Submitted', 'Pending', 'Approved', 'Rejected'];
+        $employeeChartValues = [
+            $submittedCount,
+            $pendingCount,
+            $approvedCount,
+            $rejectedCount
+        ];
+
+        // HOD chart data
+        $hodChartLabels = ['Submitted', 'On Progress', 'Approved', 'Rejected'];
+        $hodChartValues = [
+            $hodSubmittedCount,
+            $hodOnProgressCount,
+            $hodApprovedCount,
+            $hodRejectedCount
+        ];
+
+        return view('admin.dashboard', compact(
+            'submittedCount',
+            'pendingCount',
+            'approvedCount',
+            'rejectedCount',
+            'hodSubmittedCount',
+            'hodOnProgressCount',
+            'hodApprovedCount',
+            'hodRejectedCount',
+            'allSubmittedCount',
+            'allPendingCount',
+            'allApprovedCount',
+            'allRejectedCount',
+            'recentPendingLeaves',
+            'chartLabels',
+            'chartValues',
+            'leaveRequests',
+            'employeeChartLabels',
+            'employeeChartValues',
+            'hodChartLabels',
+            'hodChartValues'
+        ));
     }
-
-    // -------- Latest pending requests (admin view or user view) --------
-    $latestPending = $leaveRequests
-        ->where('status', ['pending','on_progress'])
-        ->sortByDesc('created_at')
-        ->take(6);
-
-    // -------- Chart data (grouped by request_type) --------
-    $chartData = $leaveRequests->groupBy('request_type')->map(function ($group) {
-        return count($group);
-    });
-    $chartLabels = $chartData->keys()->toArray();
-    $chartValues = $chartData->values()->toArray();
-
-    return view('admin.dashboard', compact(
-        'submittedCount',
-        'pendingCount',
-        'approvedCount',
-        'rejectedCount',
-        'allSubmittedCount',
-        'allPendingCount',
-        'allApprovedCount',
-        'allRejectedCount',
-        'hodDepartmentUserCount',
-        'latestPending',
-        'chartLabels',
-        'chartValues',
-        'leaveRequests' // optional, if you need full list in the view
-    ));
-}
-
-
 }

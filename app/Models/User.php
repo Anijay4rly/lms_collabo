@@ -23,6 +23,8 @@ class User extends Authenticatable
         'password',
         'role',
         'department_id',
+        'status',
+        'assigned_as',
     ];
 
     /**
@@ -81,5 +83,14 @@ class User extends Authenticatable
 
     public function LeaveRequests(){
         return $this->hasMany(LeaveRequest::class);
+    }
+
+    public function leaveHistories(){
+        return $this->hasManyThrough(LeaveHistory::class, LeaveRequest::class);
+    }
+
+     public function auditLogs()
+    {
+        return $this->hasMany(AuditLog::class);
     }
 }

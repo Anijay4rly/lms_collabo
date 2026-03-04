@@ -11,17 +11,27 @@ return new class extends Migration
      */
     public function up(): void
     {
+        if(!Schema::hasTable('leave_requests')) {
         Schema::create('leave_requests', function (Blueprint $table) {
             $table->id();
-            $table->foreignId('user_id')->constrained('users')->onDelete('cascade');
+
+            // Link to users table
+            $table->foreignId('user_id')
+                  ->constrained('users')
+                  ->onDelete('cascade');
+
+            // Core leave fields
             $table->string('request_type'); // e.g., sick, annual
             $table->date('start_date');
             $table->date('end_date');
-            $table->enum('status', ['submitted', 'pending','on_progress', 'approved', 'rejected'])->default('submitted');
-            $table->string('report_path')->nullable(); // optional file path
-            $table->text('admin_remark')->nullable(); // admin comments
-            $table->timestamps();
+            $table->text('reasons')->nullable();
+
+            $table->enum('status', ['submitted','pending','approved','rejected'])
+                  ->default('submitted');
+
+            $table->timestamps(); // created_at + updated_at
         });
+    }
     }
 
     /**

@@ -22,6 +22,7 @@
                     <tr>
                         <th>Leave Type</th>
                         <th>Duration</th>
+                        <th>Reason for leave</th>
                         <th>Status</th>
                         <th>Report</th>
                         <th>Actions</th>
@@ -68,7 +69,14 @@
                                 </small>
                             </td>
 
-                            {{-- 3. Status --}}
+                            {{-- 3. Reason for Leave --}}
+                            <td>
+                                <small class="text-muted">
+                                    {{ $leave->reasons ?? 'No reason provided' }}
+                                </small>
+                            </td>
+
+                            {{-- 4. Status --}}
                             <td>
                                 <span class="badge bg-{{ $color }} px-3 py-2">
                                     <i class="fas {{ $icon }} me-1"></i>
@@ -76,10 +84,10 @@
                                 </span>
                             </td>
 
-                            {{-- 4. Report --}}
+                            {{-- 5. Report --}}
                             <td class="text-center">
                                 @if(!empty($leave->report_path))
-                                    <a href="{{ asset('storage/' . $leave->report_path) }}"
+                                    <a href="{{ route('leaves.download', $leave->id) }}"
                                        target="_blank"
                                        class="btn btn-sm btn-outline-info"
                                        title="Download Report">
