@@ -11,9 +11,11 @@ return new class extends Migration
      */
     public function up(): void
     {
-        Schema::table('leave_requests', function (Blueprint $table) {
-            $table->string('destination')->nullable()->after('reasons');
-        });
+        if (!Schema::hasColumn('leave_requests', 'destination')) {
+            Schema::table('leave_requests', function (Blueprint $table) {
+                $table->string('destination')->nullable()->after('reasons');
+            });
+        }
     }
 
     /**

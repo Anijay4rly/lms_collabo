@@ -11,7 +11,7 @@ return new class extends Migration
      */
     public function up(): void
     {
-        if(!Schema::hasTable('leave_requests')) {
+        if(!Schema::hasTable('leave_requests') || !Schema::hasColumn('leave_requests', 'destination')) {
         Schema::create('leave_requests', function (Blueprint $table) {
             $table->id();
 
