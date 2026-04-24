@@ -110,6 +110,21 @@ return response()->json([
     {
         $leave = LeaveRequest::find($id);
 
+        //can only update own leave
+        if($leave->user_id !== auth()->id())
+         { return response()->json([
+            'status' => 'error',
+            'message' => 'Anauthorized: You can only update your own leave requests'
+            ], 403);}
+
+            //can only update if status is submitted
+            if($leave->status !== 'submitted'){
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'Only leave requests with status "submitted" can be updated.'
+                ], 403);
+            }
+
         if (!$leave) {
             return response()->json(['status' => 'error', 'message' => 'Leave request not found'], 404);
         }
@@ -117,6 +132,8 @@ return response()->json([
         // Validate only the fields that the user is trying to change
         $validated = $request->validate([
             'request_type' => 'sometimes|string',
+            'start_date'   => 'sometimes|date|after_or_equal:today',
+            'end_date'     => 'sometimes|date|after_or_equal:start_date',
             'reasons'      => 'sometimes|string',
         ]);
 
@@ -133,7 +150,22 @@ return response()->json([
     {
         $leave = LeaveRequest::find($id);
 
-        if (!$leave) {
+        //can delete own leave
+        if($leave->user_id !== auth()->id())
+         { return response()->json([
+            'status' => 'error',
+            'message' => 'You can only delete your own leave requests'
+            ], 403);}
+
+            //can only delete if status is submitted
+            if($leave->status !== 'submitted'){
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'Only leave requests with status "submitted" can be deleted.'
+                ], 403);
+            }
+
+            if (!$leave) {
             return response()->json(['status' => 'error', 'message' => 'Leave request not found'], 404);
         }
 
